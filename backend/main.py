@@ -1,18 +1,19 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from firebase_config import db
+from auth import create_token, verify_token
 
 app = FastAPI()
 
-# ---------------------
-# Models
-# ---------------------
+# ---------------- MODELS ----------------
 
-class User(BaseModel):
-    name: str
+class Login(BaseModel):
     email: str
     password: str
-    role: str
+
+class Service(BaseModel):
+    name: str
+    price: float
 
 class Payment(BaseModel):
     email: str
@@ -20,37 +21,64 @@ class Payment(BaseModel):
     amount: float
     method: str
 
-# ---------------------
-# Routes
-# ---------------------
+# ---------------- DEFAULT SERVICES ----------------
 
-@app.get("/")
-def home():
-    return {"message": "Santhosh Portfolio Cloud API Running"}
+DEFAULT_SERVICES = [
+    {"name": "IT Consulting", "price": 500},
+    {"name": "HR Consulting", "price": 400},
+    {"name": "Healthcare Consulting", "price": 600},
+    {"name": "Marketing Consulting", "price": 450},
+    {"name": "Resume Writing", "price": 150},
+    {"name": "Social Media Marketing", "price": 300},
+    {"name": "Content Strategy", "price": 350},
+    {"name": "Leadership Development", "price": 550},
+    {"name": "Negotiation", "price": 250},
+    {"name": "Team Building", "price": 380},
+]
 
-@app.post("/register")
-def register(user: User):
-    db.collection("users").add(user.dict())
-    return {"message": "User Registered Successfully in Cloud"}
+# ---------------- INIT SERVICES ----------------
 
-@app.post("/login")
-def login(user: User):
-    return {"message": "Login Successful (Cloud Based)"}
+@app.on_event("startup")
+def init_services():
+    services_ref = db.collection("services")
+    if not services_ref.stream():
+        for service in DEFAULT_SERVICES:
+            services_ref.add(service)
+
+# ---------------- LOGIN (Admin Only) ----------------
+
+@app.post("/admin/login")
+def admin_login(login: Login):
+    if login.email == "admin@santhosh.com" and login.password == "admin123":
+        token = create_token({"role": "admin"})
+        return {"token": token}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+# ---------------- GET SERVICES ----------------
 
 @app.get("/services")
-def services():
-    return {
-        "services": [
-            "Resume Editing & ATS Optimization",
-            "Bench Sales Marketing",
-            "Hotlist Circulation",
-            "Vendor Marketing",
-            "LinkedIn Branding"
-        ]
-    }
+def get_services():
+    services = db.collection("services").stream()
+    return [service.to_dict() | {"id": service.id} for service in services]
+
+# ---------------- UPDATE PRICE (ADMIN ONLY) ----------------
+
+@app.put("/admin/update/{service_id}")
+def update_price(service_id: str, service: Service, token: str):
+    decoded = verify_token(token)
+    if decoded["role"] != "admin":
+        raise HTTPException(status_code=403)
+
+    db.collection("services").document(service_id).update({
+        "name": service.name,
+        "price": service.price
+    })
+
+    return {"message": "Service Updated Successfully"}
+
+# ---------------- PAYMENT ----------------
 
 @app.post("/payment")
-def payment(payment: Payment):
+def make_payment(payment: Payment):
     db.collection("payments").add(payment.dict())
-    return {"message": "Payment Saved to Cloud"}
-
+    return {"message": "Payment Recorded"}
